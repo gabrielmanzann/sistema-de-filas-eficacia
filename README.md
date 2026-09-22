@@ -39,7 +39,7 @@ Sistema web full-stack desenvolvido para otimizar o fluxo de atendimento da equi
 
 1. **Clone o repositório:**
    ```bash
-   git clone [https://github.com/gabrielmanzann/sistema-de-filas-eficacia.git](https://github.com/gabrielmanzann/sistema-de-filas-eficacia.git)
+   git clone https://github.com/gabrielmanzann/sistema-de-filas-eficacia.git
    cd sistema-de-filas-eficacia
 
 2. **Crie o ambiente virtual:**   
