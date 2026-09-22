@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="api-base" content="http://127.0.0.1:5000/api" />
+    <title>Fila de Auditoria · Área de Eficácia</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = {
+        darkMode: "class",
+        theme: {
+          extend: {
+            colors: { brand: { 50: "#eef2ff", 400: "#818cf8", 500: "#6366f1", 600: "#4f46e5", 700: "#4338ca" } },
+            boxShadow: { card: "0 10px 30px -12px rgb(79 70 229 / 0.28)" },
+          },
+        },
+      };
+    </script>
+    <link rel="stylesheet" href="css/styles.css" />
+  </head>
+  <body class="bg-slate-50 text-slate-800 dark:bg-slate-950 dark:text-slate-100">
+    <main id="app" class="min-h-dvh">
+      <section id="view-login" class="view is-active">
+        <div class="relative min-h-dvh overflow-hidden">
+          <div class="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_left,_rgba(99,102,241,0.28),_transparent_42%),radial-gradient(circle_at_bottom_right,_rgba(15,23,42,0.35),_transparent_40%)]"></div>
+          <div class="relative mx-auto flex min-h-dvh max-w-lg flex-col justify-center px-4 py-10">
+            <header class="mb-8 text-center">
+              <p class="mb-2 text-xs font-semibold uppercase tracking-[0.22em] text-brand-600 dark:text-brand-400">Área de Eficácia</p>
+              <h1 class="text-3xl font-extrabold tracking-tight text-slate-900 dark:text-white">Sistema de Fila de Auditoria</h1>
+              <p class="mt-2 text-sm text-slate-500 dark:text-slate-400">Entre usando apenas seu nome de usuário e senha.</p>
+            </header>
+
+            <form id="login-form" class="rounded-xl border border-slate-200/80 bg-white/90 p-6 shadow-card backdrop-blur dark:border-slate-800 dark:bg-slate-900/80">
+              <label class="mb-4 block text-sm font-medium">
+                Nome de usuário
+                <input id="login-user" autocomplete="username" required maxlength="100" class="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 outline-none ring-brand-500 focus:ring-2 dark:border-slate-700 dark:bg-slate-950" placeholder="Ex.: Agata" />
+              </label>
+              <label class="mb-5 block text-sm font-medium">
+                Senha
+                <input id="login-pass" type="password" autocomplete="current-password" required maxlength="128" class="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 outline-none ring-brand-500 focus:ring-2 dark:border-slate-700 dark:bg-slate-950" placeholder="••••••••" />
+              </label>
+              <p id="login-error" role="alert" class="mb-3 hidden rounded-xl bg-rose-50 px-3 py-2 text-sm text-rose-700 dark:bg-rose-950/60 dark:text-rose-200"></p>
+              <button type="submit" class="w-full rounded-xl bg-brand-500 px-4 py-3 text-sm font-semibold text-white shadow-card transition hover:bg-brand-600">Entrar</button>
+              <p class="mt-4 text-center text-xs text-slate-500 dark:text-slate-400">Demonstração: Agata, Ricardo, Maria ou Gestor · senha <strong>123</strong></p>
+            </form>
+
+            <div class="mt-6 flex justify-center"><button type="button" data-action="toggle-theme" class="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">Alternar tema</button></div>
+          </div>
+        </div>
+      </section>
+
+      <section id="view-auditor" class="view">
+        <div class="mx-auto max-w-5xl px-4 py-6 sm:py-8">
+          <header class="mb-6 flex flex-wrap items-center justify-between gap-3">
+            <div><p class="text-xs font-semibold uppercase tracking-[0.18em] text-brand-600 dark:text-brand-400">Fila de auditoria</p><h2 id="auditor-greeting" class="text-2xl font-extrabold text-slate-900 dark:text-white">Olá</h2></div>
+            <div class="flex items-center gap-2">
+              <button type="button" data-action="open-password" class="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-medium dark:border-slate-700 dark:bg-slate-900">Alterar senha</button>
+              <button type="button" data-action="toggle-theme" class="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-medium dark:border-slate-700 dark:bg-slate-900">Tema</button>
+              <button type="button" data-action="logout" class="rounded-xl bg-slate-900 px-3 py-2 text-sm font-medium text-white dark:bg-slate-100 dark:text-slate-900">Sair</button>
+            </div>
+          </header>
+          <div id="auditor-turn-card" class="mb-5 overflow-hidden rounded-xl p-6 shadow-card"></div>
+          <div class="grid gap-5 lg:grid-cols-3">
+            <article class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900 lg:col-span-2"><h3 class="mb-4 text-lg font-bold">Ordem da fila</h3><ol id="auditor-queue" class="space-y-3"></ol></article>
+            <article class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900"><p class="text-sm font-medium text-slate-500 dark:text-slate-400">Minhas auditorias hoje</p><p id="auditor-count" class="mt-2 text-5xl font-extrabold text-brand-600 dark:text-brand-400">0</p></article>
+          </div>
+        </div>
+      </section>
+
+      <section id="view-gestor" class="view">
+        <div class="mx-auto max-w-6xl px-4 py-6 sm:py-8">
+          <header class="mb-6 flex flex-wrap items-center justify-between gap-3">
+            <div><p class="text-xs font-semibold uppercase tracking-[0.18em] text-brand-600 dark:text-brand-400">Painel do gestor</p><h2 class="text-2xl font-extrabold text-slate-900 dark:text-white">Fila de Auditoria</h2></div>
+            <div class="flex flex-wrap items-center gap-2">
+              <button type="button" data-action="open-password" class="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-medium dark:border-slate-700 dark:bg-slate-900">Alterar senha</button>
+              <button type="button" data-action="toggle-theme" class="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-medium dark:border-slate-700 dark:bg-slate-900">Claro / escuro</button>
+              <button type="button" data-action="open-display" class="rounded-xl bg-brand-500 px-3 py-2 text-sm font-semibold text-white hover:bg-brand-600">Abrir visualização</button>
+              <button type="button" data-action="logout" class="rounded-xl bg-slate-900 px-3 py-2 text-sm font-medium text-white dark:bg-slate-100 dark:text-slate-900">Sair</button>
+            </div>
+          </header>
+
+          <article id="gestor-current" class="mb-5 rounded-xl bg-gradient-to-r from-brand-600 to-indigo-900 p-6 text-white shadow-card"></article>
+
+          <div class="mb-5 grid gap-5 lg:grid-cols-5">
+            <article class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900 lg:col-span-3"><h3 class="mb-4 text-lg font-bold">Fila de funcionários</h3><ul id="gestor-queue" class="space-y-3"></ul></article>
+            <article class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900 lg:col-span-2">
+              <h3 class="mb-4 text-lg font-bold">Adicionar à fila</h3>
+              <form id="add-form" class="mb-4 space-y-2">
+                <select id="add-user" required class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 outline-none ring-brand-500 focus:ring-2 dark:border-slate-700 dark:bg-slate-950"><option value="">Selecione um funcionário</option></select>
+                <button type="submit" class="w-full rounded-xl bg-brand-500 px-3 py-2.5 text-sm font-semibold text-white hover:bg-brand-600">Adicionar à fila</button>
+              </form>
+              <button type="button" data-action="clear-queue" class="mb-4 w-full rounded-xl border border-rose-200 bg-rose-50 px-3 py-2.5 text-sm font-semibold text-rose-700 hover:bg-rose-100 dark:border-rose-900 dark:bg-rose-950/50 dark:text-rose-200">Limpar fila</button>
+              <div class="grid grid-cols-2 gap-3"><div class="rounded-xl bg-slate-50 p-4 dark:bg-slate-800/80"><p class="text-xs font-medium text-slate-500">Na fila</p><p id="metric-queue" class="text-3xl font-extrabold text-brand-600">0</p></div><div class="rounded-xl bg-slate-50 p-4 dark:bg-slate-800/80"><p class="text-xs font-medium text-slate-500">Aguardando</p><p id="metric-waiting" class="text-3xl font-extrabold text-slate-800 dark:text-white">0</p></div></div>
+            </article>
+          </div>
+
+          <article class="mb-5 rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+            <div class="mb-4"><p class="text-xs font-semibold uppercase tracking-[0.18em] text-brand-600 dark:text-brand-400">Gestão de acessos</p><h3 class="text-lg font-bold">Cadastrar e editar usuários</h3></div>
+            <form id="user-form" class="grid gap-3 md:grid-cols-4">
+              <label class="text-sm font-medium md:col-span-2">Nome<input id="user-name" required maxlength="100" class="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 outline-none ring-brand-500 focus:ring-2 dark:border-slate-700 dark:bg-slate-950" placeholder="Nome do usuário" /></label>
+              <label class="text-sm font-medium">Senha <span id="password-hint" class="font-normal text-slate-500">inicial</span><input id="user-password" type="password" required maxlength="128" class="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 outline-none ring-brand-500 focus:ring-2 dark:border-slate-700 dark:bg-slate-950" placeholder="Senha" /></label>
+              <label class="text-sm font-medium">Perfil<select id="user-type" class="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 outline-none ring-brand-500 focus:ring-2 dark:border-slate-700 dark:bg-slate-950"><option value="FUNCIONARIO">Funcionário</option><option value="GESTOR">Gestor</option></select></label>
+              <div class="flex items-end gap-2 md:col-span-4"><button id="user-submit" type="submit" class="rounded-xl bg-brand-500 px-4 py-2.5 text-sm font-semibold text-white hover:bg-brand-600">Cadastrar usuário</button><button id="cancel-user-edit" type="button" class="hidden rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-medium dark:border-slate-700">Cancelar edição</button><p id="user-form-message" role="status" class="text-sm text-slate-500"></p></div>
+            </form>
+            <div class="mt-5 overflow-x-auto"><table class="min-w-full text-left text-sm"><thead class="border-b border-slate-200 text-xs uppercase text-slate-500 dark:border-slate-700"><tr><th class="px-3 py-3">Nome</th><th class="px-3 py-3">Perfil</th><th class="px-3 py-3">Status</th><th class="px-3 py-3 text-right">Ações</th></tr></thead><tbody id="user-list"></tbody></table></div>
+          </article>
+
+          <article class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+            <div class="mb-4 flex flex-wrap items-center justify-between gap-3">
+              <div><p class="text-xs font-semibold uppercase tracking-[0.18em] text-brand-600 dark:text-brand-400">Relatórios</p><h3 class="text-lg font-bold">Métricas e ranking</h3></div>
+              <button type="button" data-action="export-excel" class="rounded-xl bg-brand-500 px-3 py-2 text-sm font-semibold text-white hover:bg-brand-600">Exportar Relatório Excel</button>
+            </div>
+            <div class="mb-5 flex flex-wrap gap-2" role="tablist" aria-label="Período das métricas">
+              <button type="button" data-action="select-metric-period" data-metric-period="dia" class="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold dark:border-slate-700 dark:bg-slate-800">Hoje</button>
+              <button type="button" data-action="select-metric-period" data-metric-period="semana" class="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold dark:border-slate-700 dark:bg-slate-800">Esta semana</button>
+              <button type="button" data-action="select-metric-period" data-metric-period="mes" class="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold dark:border-slate-700 dark:bg-slate-800">Este mês</button>
+            </div>
+            <div class="mb-5 grid gap-3 sm:grid-cols-2">
+              <div class="rounded-xl bg-brand-50 p-4 dark:bg-brand-600/15"><p class="text-xs font-semibold uppercase tracking-wide text-brand-700 dark:text-brand-300">Auditorias concluídas</p><p id="metric-total-completed" class="mt-1 text-4xl font-extrabold text-brand-700 dark:text-brand-300">0</p></div>
+              <div class="rounded-xl bg-slate-50 p-4 dark:bg-slate-800/80"><p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Período selecionado</p><p id="metric-period-label" class="mt-1 text-xl font-bold">Hoje</p></div>
+            </div>
+            <h4 class="mb-3 text-sm font-bold uppercase tracking-wide text-slate-500">Ranking de produtividade</h4>
+            <ol id="metrics-rank" class="space-y-2"></ol>
+          </article>
+        </div>
+      </section>
+
+      <section id="view-display" class="view"><div class="relative min-h-dvh bg-slate-950 px-4 py-6 text-white sm:px-10 sm:py-10"><div class="mx-auto flex max-w-6xl flex-col gap-8"><header class="flex flex-wrap items-center justify-between gap-3"><div><p class="text-sm font-semibold uppercase tracking-[0.22em] text-brand-400">Área de Eficácia</p><h2 class="text-3xl font-extrabold sm:text-5xl">Fila de Auditoria</h2></div><button type="button" data-action="close-display" class="rounded-xl border border-white/20 px-4 py-2 text-sm font-medium">Fechar visualização</button></header><div id="display-current" class="rounded-xl bg-gradient-to-br from-brand-500 to-indigo-950 p-8 shadow-card sm:p-12"></div><ol id="display-queue" class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3"></ol></div></div></section>
+    </main>
+
+    <section id="password-dialog" role="dialog" aria-modal="true" aria-labelledby="password-dialog-title" class="fixed inset-0 z-50 hidden items-center justify-center bg-slate-950/60 px-4">
+      <form id="password-form" class="w-full max-w-md rounded-xl bg-white p-6 shadow-card dark:bg-slate-900"><div class="mb-5 flex items-start justify-between gap-3"><div><h2 id="password-dialog-title" class="text-xl font-bold">Alterar minha senha</h2><p class="mt-1 text-sm text-slate-500">Informe a senha atual e defina a nova.</p></div><button type="button" data-action="close-password" aria-label="Fechar" class="text-xl text-slate-500">×</button></div><label class="mb-3 block text-sm font-medium">Senha atual<input id="current-password" type="password" required maxlength="128" autocomplete="current-password" class="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 outline-none ring-brand-500 focus:ring-2 dark:border-slate-700 dark:bg-slate-950" /></label><label class="mb-5 block text-sm font-medium">Nova senha<input id="new-password" type="password" required maxlength="128" autocomplete="new-password" class="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 outline-none ring-brand-500 focus:ring-2 dark:border-slate-700 dark:bg-slate-950" /></label><p id="password-error" role="alert" class="mb-3 hidden rounded-xl bg-rose-50 px-3 py-2 text-sm text-rose-700"></p><div class="flex justify-end gap-2"><button type="button" data-action="close-password" class="rounded-xl border border-slate-200 px-4 py-2 text-sm font-medium dark:border-slate-700">Cancelar</button><button type="submit" class="rounded-xl bg-brand-500 px-4 py-2 text-sm font-semibold text-white">Salvar senha</button></div></form>
+    </section>
+    <script src="js/app.js"></script>
+  </body>
+</html>
