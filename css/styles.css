@@ -8,6 +8,21 @@ body {
   min-height: 100dvh;
 }
 
+.logo-unicom {
+  display: block;
+  width: auto;
+  max-width: min(100%, 260px);
+  height: 50px;
+  margin: 0 auto 0.875rem;
+  border: none;
+  background: transparent;
+  object-fit: contain;
+}
+
+.dark .logo-unicom {
+  filter: invert(1) hue-rotate(180deg) drop-shadow(0 0 4px rgb(255 255 255 / 0.2));
+}
+
 .view {
   display: none;
 }

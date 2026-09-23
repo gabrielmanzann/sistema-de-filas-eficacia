@@ -1,5 +1,7 @@
-const configuredApiBase = document.querySelector('meta[name="api-base"]')?.content?.trim();
-const API_BASE = configuredApiBase || (window.location.port === "5000" ? "/api" : "http://127.0.0.1:5000/api");
+const apiHost = window.location.hostname.includes(":")
+  ? `[${window.location.hostname}]`
+  : window.location.hostname;
+const API_ORIGIN = `${window.location.protocol}//${apiHost}:5000`;
 const THEME_KEY = "fila-auditoria-theme";
 const SESSION_KEY = "fila-auditoria-session";
 
@@ -37,23 +39,35 @@ function escapeHtml(value) {
   }[character]));
 }
 
-async function api(path, options = {}) {
+async function api(endpoint, options = {}) {
   const headers = new Headers(options.headers || {});
   if (options.body && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
   if (session?.token && !headers.has("Authorization")) headers.set("Authorization", `Bearer ${session.token}`);
 
+  const requestUrl = `${API_ORIGIN}${endpoint}`;
   let response;
   try {
-    response = await fetch(`${API_BASE}${path}`, { ...options, headers });
+    response = await fetch(requestUrl, { ...options, headers });
   } catch {
-    throw new Error("Não foi possível conectar à API. Confirme se o Flask está em http://127.0.0.1:5000 e se a origem está liberada no CORS.");
+    throw new Error(`Não foi possível conectar à API em ${requestUrl}. Confirme que o Flask está ativo na porta 5000.`);
   }
 
-  const raw = await response.text();
-  let body = {};
-  try { body = raw ? JSON.parse(raw) : {}; }
+  const contentType = response.headers.get("content-type") || "";
+  if (!contentType.includes("application/json")) {
+    console.error("A API retornou uma resposta não JSON.", {
+      endpoint: requestUrl,
+      status: response.status,
+      statusText: response.statusText,
+      contentType,
+    });
+    throw new Error(`A API retornou HTTP ${response.status} em formato não JSON. Confira o console do navegador.`);
+  }
+
+  let body;
+  try { body = await response.json(); }
   catch {
-    throw new Error("A API respondeu em formato inválido. Ela deve retornar JSON.");
+    console.error("Não foi possível interpretar o JSON da API.", { endpoint: requestUrl, status: response.status });
+    throw new Error(`A API retornou HTTP ${response.status} com JSON inválido.`);
   }
   if (!response.ok) throw new Error(body.erro || "Não foi possível concluir a operação.");
   return body;
@@ -74,8 +88,8 @@ function isManager() { return session?.tipo_usuario === "GESTOR"; }
 
 async function refreshState() {
   const period = isManager() ? selectedMetricPeriod : "dia";
-  const requests = [api("/fila"), api(`/gestor/metrics?periodo=${period}`)];
-  if (isManager()) requests.push(api("/usuarios"));
+  const requests = [api("/api/fila"), api(`/api/gestor/metrics?periodo=${period}`)];
+  if (isManager()) requests.push(api("/api/usuarios"));
   const [queueResult, metricsResult, usersResult] = await Promise.all(requests);
   state.queue = queueResult.fila;
   state.metrics = metricsResult;
@@ -89,7 +103,7 @@ async function downloadExcelReport() {
   if (session?.token) headers.set("Authorization", `Bearer ${session.token}`);
   let response;
   try {
-    response = await fetch(`${API_BASE}/gestor/exportar-excel?periodo=${selectedMetricPeriod}`, { headers });
+    response = await fetch(`${API_ORIGIN}/api/gestor/exportar-excel?periodo=${selectedMetricPeriod}`, { headers });
   } catch {
     throw new Error("Não foi possível conectar à API para baixar o relatório.");
   }
@@ -239,7 +253,7 @@ document.getElementById("login-form").addEventListener("submit", async (event) =
   event.preventDefault();
   const error = document.getElementById("login-error");
   try {
-    const result = await api("/login", { method: "POST", body: JSON.stringify({ nome: document.getElementById("login-user").value.trim(), senha: document.getElementById("login-pass").value }) });
+    const result = await api("/api/login", { method: "POST", body: JSON.stringify({ nome: document.getElementById("login-user").value.trim(), senha: document.getElementById("login-pass").value }) });
     session = { ...result.usuario, token: result.token };
     saveSession(session);
     error.classList.add("hidden");
@@ -255,7 +269,7 @@ document.getElementById("add-form").addEventListener("submit", async (event) => 
   event.preventDefault();
   const userId = Number(document.getElementById("add-user").value);
   if (!userId) return;
-  await refreshAfter(() => api("/fila/adicionar", { method: "POST", body: JSON.stringify({ usuario_id: userId }) }));
+  await refreshAfter(() => api("/api/fila/adicionar", { method: "POST", body: JSON.stringify({ usuario_id: userId }) }));
 });
 
 document.getElementById("user-form").addEventListener("submit", async (event) => {
@@ -268,10 +282,10 @@ document.getElementById("user-form").addEventListener("submit", async (event) =>
     if (editingUserId) {
       const payload = { nome: name, tipo_usuario: type };
       if (password) payload.senha = password;
-      await api(`/usuarios/${editingUserId}`, { method: "PATCH", body: JSON.stringify(payload) });
+      await api(`/api/usuarios/${editingUserId}`, { method: "PATCH", body: JSON.stringify(payload) });
       message.textContent = "Usuário atualizado.";
     } else {
-      await api("/usuarios", { method: "POST", body: JSON.stringify({ nome: name, senha: password, tipo_usuario: type }) });
+      await api("/api/usuarios", { method: "POST", body: JSON.stringify({ nome: name, senha: password, tipo_usuario: type }) });
       message.textContent = "Usuário cadastrado.";
     }
     await refreshState();
@@ -283,7 +297,7 @@ document.getElementById("password-form").addEventListener("submit", async (event
   event.preventDefault();
   const error = document.getElementById("password-error");
   try {
-    await api("/minha-senha", { method: "PATCH", body: JSON.stringify({ senha_atual: document.getElementById("current-password").value, nova_senha: document.getElementById("new-password").value }) });
+    await api("/api/minha-senha", { method: "PATCH", body: JSON.stringify({ senha_atual: document.getElementById("current-password").value, nova_senha: document.getElementById("new-password").value }) });
     closePasswordDialog();
     alert("Senha alterada com sucesso.");
   } catch (err) {
@@ -314,14 +328,14 @@ document.addEventListener("click", async (event) => {
   if (action === "deactivate-user") {
     const target = state.users.find((user) => user.id === Number(button.dataset.userId));
     if (target && confirm(`Inativar ${target.nome}? O acesso e a participação na fila serão removidos.`)) {
-      return refreshAfter(() => api(`/usuarios/${target.id}`, { method: "DELETE" }));
+      return refreshAfter(() => api(`/api/usuarios/${target.id}`, { method: "DELETE" }));
     }
     return;
   }
-  if (action === "complete-turn") return refreshAfter(() => api("/fila/concluir", { method: "POST", body: JSON.stringify({}) }));
-  if (action === "clear-queue" && confirm("Limpar toda a fila?")) return refreshAfter(() => api("/fila/limpar", { method: "POST", body: JSON.stringify({}) }));
-  if (action === "remove") return refreshAfter(() => api("/fila/remover", { method: "POST", body: JSON.stringify({ id: Number(button.dataset.id) }) }));
-  if (action === "move-up" || action === "move-down") return refreshAfter(() => api("/fila/reordenar", { method: "POST", body: JSON.stringify({ id: Number(button.dataset.id), acao: action === "move-up" ? "SUBIR" : "DESCER" }) }));
+  if (action === "complete-turn") return refreshAfter(() => api("/api/fila/concluir", { method: "POST", body: JSON.stringify({}) }));
+  if (action === "clear-queue" && confirm("Limpar toda a fila?")) return refreshAfter(() => api("/api/fila/limpar", { method: "POST", body: JSON.stringify({}) }));
+  if (action === "remove") return refreshAfter(() => api("/api/fila/remover", { method: "POST", body: JSON.stringify({ id: Number(button.dataset.id) }) }));
+  if (action === "move-up" || action === "move-down") return refreshAfter(() => api("/api/fila/reordenar", { method: "POST", body: JSON.stringify({ id: Number(button.dataset.id), acao: action === "move-up" ? "SUBIR" : "DESCER" }) }));
 });
 
 applyTheme();

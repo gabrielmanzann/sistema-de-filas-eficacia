@@ -9,7 +9,7 @@ from io import BytesIO
 from pathlib import Path
 
 import mysql.connector
-from flask import Flask, g, jsonify, request, send_file
+from flask import Flask, g, jsonify, request, send_file, send_from_directory
 from flask_cors import CORS
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from openpyxl import Workbook
@@ -36,14 +36,14 @@ app.config["SECRET_KEY"] = os.getenv("APP_SECRET_KEY") or secrets.token_urlsafe(
 
 # O front-end pode ser servido pelo `npx serve` (3000), Live Server (5500) ou
 # pelo próprio Flask. A lista pode ser restringida com CORS_ORIGINS no .env.
-cors_origins = [
-    origin.strip()
-    for origin in os.getenv(
-        "CORS_ORIGINS",
-        "http://localhost:3000,http://127.0.0.1:3000,"
-        "http://localhost:5500,http://127.0.0.1:5500",
-    ).split(",")
-    if origin.strip()
+cors_setting = os.getenv(
+    "CORS_ORIGINS",
+    "http://localhost:3000,http://127.0.0.1:3000,"
+    "http://localhost:5500,http://127.0.0.1:5500,"
+    "http://localhost:5173,http://127.0.0.1:5173",
+).strip()
+cors_origins = "*" if cors_setting == "*" else [
+    origin.strip() for origin in cors_setting.split(",") if origin.strip()
 ]
 CORS(
     app,
@@ -52,6 +52,27 @@ CORS(
     allow_headers=["Content-Type", "Authorization"],
     expose_headers=["Content-Disposition"],
 )
+
+
+@app.get("/")
+def frontend_index():
+    """Serve a interface no mesmo endereço da API para evitar CORS em produção."""
+    return send_from_directory(app.root_path, "index.html")
+
+
+@app.get("/css/<path:filename>")
+def frontend_css(filename):
+    return send_from_directory(os.path.join(app.root_path, "css"), filename)
+
+
+@app.get("/js/<path:filename>")
+def frontend_js(filename):
+    return send_from_directory(os.path.join(app.root_path, "js"), filename)
+
+
+@app.get("/assets/<path:filename>")
+def frontend_assets(filename):
+    return send_from_directory(os.path.join(app.root_path, "assets"), filename)
 
 token_serializer = URLSafeTimedSerializer(app.config["SECRET_KEY"], salt="fila-auditoria-auth")
 TOKEN_MAX_AGE_SECONDS = int(os.getenv("TOKEN_MAX_AGE_SECONDS", "28800"))
@@ -426,7 +447,7 @@ def health():
         return jsonify({"status": "indisponivel", "erro": "Banco de dados inacessível."}), 503
 
 
-@app.post("/api/login")
+@app.route("/api/login", methods=["POST"])
 def login():
     data = request_data()
     # `usuario` é mantido como alias para clientes que ainda não foram atualizados.
@@ -755,7 +776,7 @@ def export_excel():
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     app.run(
-        host="127.0.0.1",
+        host=os.getenv("FLASK_HOST", "127.0.0.1"),
         port=int(os.getenv("PORT", "5000")),
         debug=os.getenv("FLASK_DEBUG", "false").lower() == "true",
     )
