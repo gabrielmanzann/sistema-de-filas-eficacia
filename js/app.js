@@ -1,7 +1,6 @@
-const apiHost = window.location.hostname.includes(":")
-  ? `[${window.location.hostname}]`
-  : window.location.hostname;
-const API_ORIGIN = `${window.location.protocol}//${apiHost}:5000`;
+// A interface e a API Flask são servidas pelo mesmo host. Assim, no Render
+// a origem vira automaticamente https://<servico>.onrender.com, sem portas.
+const API_ORIGIN = window.location.origin;
 const THEME_KEY = "fila-auditoria-theme";
 const SESSION_KEY = "fila-auditoria-session";
 
@@ -49,7 +48,7 @@ async function api(endpoint, options = {}) {
   try {
     response = await fetch(requestUrl, { ...options, headers });
   } catch {
-    throw new Error(`Não foi possível conectar à API em ${requestUrl}. Confirme que o Flask está ativo na porta 5000.`);
+    throw new Error(`Não foi possível conectar à API em ${requestUrl}. Confirme que a aplicação está online.`);
   }
 
   const contentType = response.headers.get("content-type") || "";
