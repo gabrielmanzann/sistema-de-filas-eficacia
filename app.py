@@ -395,6 +395,20 @@ def metrics_payload(cursor, period):
     return {"periodo": period, "titulo": label, "total_auditorias": total, "ranking": cursor.fetchall()}
 
 
+def audit_ranking_payload(cursor):
+    """Ranking geral de auditorias dos funcionários atualmente ativos."""
+    cursor.execute(
+        """SELECT u.id AS usuario_id, u.nome, COUNT(ac.id) AS total
+           FROM usuarios u
+           LEFT JOIN auditorias_concluidas ac ON ac.usuario_id = u.id
+           WHERE u.tipo_usuario = 'FUNCIONARIO' AND u.ativo = TRUE
+           GROUP BY u.id, u.nome
+           HAVING COUNT(ac.id) > 0
+           ORDER BY total DESC, u.nome"""
+    )
+    return cursor.fetchall()
+
+
 def history_rows(cursor, period):
     period, label, condition = metric_period(period)
     cursor.execute(
@@ -916,6 +930,14 @@ def ranking():
     with connection() as conn:
         cursor = conn.cursor(dictionary=True)
         return jsonify({"ranking": metrics_payload(cursor, "dia")["ranking"]})
+
+
+@app.get("/api/ranking-auditorias")
+@authenticated
+def audit_ranking():
+    with connection() as conn:
+        cursor = conn.cursor(dictionary=True)
+        return jsonify({"ranking": audit_ranking_payload(cursor)})
 
 
 @app.get("/api/gestor/metrics")

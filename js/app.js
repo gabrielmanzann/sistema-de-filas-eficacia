@@ -7,6 +7,7 @@ const SESSION_KEY = "fila-auditoria-session";
 let state = {
   queue: [],
   ranking: [],
+  auditRanking: [],
   metrics: { periodo: "dia", titulo: "Hoje", total_auditorias: 0, ranking: [] },
   users: [],
   inactiveUsers: [],
@@ -16,6 +17,7 @@ let currentView = "login";
 let editingUserId = null;
 let selectedMetricPeriod = "dia";
 let showInactiveProfiles = false;
+let auditorRankingExpanded = false;
 
 const views = {
   login: document.getElementById("view-login"),
@@ -89,16 +91,32 @@ function isManager() { return session?.tipo_usuario === "GESTOR"; }
 
 async function refreshState() {
   const period = isManager() ? selectedMetricPeriod : "dia";
-  const requests = [api("/api/fila"), api(`/api/gestor/metrics?periodo=${period}`)];
   if (isManager()) {
-    requests.push(api("/api/usuarios"), api("/api/usuarios/desativados"));
+    const [queueResult, metricsResult, usersResult, inactiveUsersResult] = await Promise.all([
+      api("/api/fila"),
+      api(`/api/gestor/metrics?periodo=${period}`),
+      api("/api/usuarios"),
+      api("/api/usuarios/desativados"),
+    ]);
+    state.queue = queueResult.fila;
+    state.metrics = metricsResult;
+    state.ranking = metricsResult.ranking;
+    state.users = usersResult.usuarios;
+    state.inactiveUsers = inactiveUsersResult.usuarios;
+    state.auditRanking = [];
+  } else {
+    const [queueResult, metricsResult, auditRankingResult] = await Promise.all([
+      api("/api/fila"),
+      api(`/api/gestor/metrics?periodo=${period}`),
+      api("/api/ranking-auditorias"),
+    ]);
+    state.queue = queueResult.fila;
+    state.metrics = metricsResult;
+    state.ranking = metricsResult.ranking;
+    state.auditRanking = auditRankingResult.ranking;
+    state.users = [];
+    state.inactiveUsers = [];
   }
-  const [queueResult, metricsResult, usersResult, inactiveUsersResult] = await Promise.all(requests);
-  state.queue = queueResult.fila;
-  state.metrics = metricsResult;
-  state.ranking = metricsResult.ranking;
-  state.users = usersResult?.usuarios || [];
-  state.inactiveUsers = inactiveUsersResult?.usuarios || [];
   render();
 }
 
@@ -161,6 +179,25 @@ function renderAuditor() {
     card.innerHTML = `<div class="flex flex-wrap items-center gap-4"><span class="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl bg-white/15 text-2xl font-black text-white ring-1 ring-white/35">${ordinal(index + 1)}</span><div><p class="text-xs font-bold uppercase tracking-[0.18em] text-indigo-100">Sua posição na fila</p><p class="mt-1 text-2xl font-extrabold tracking-tight text-white sm:text-3xl">Você é o ${ordinal(index + 1)} da fila</p><p class="mt-2 text-base font-medium text-indigo-50">Aguarde a sua vez na ordem da auditoria.</p></div></div>`;
   }
   document.getElementById("auditor-queue").innerHTML = state.queue.length ? state.queue.map((item, index) => queueItem(item, index, false)).join("") : "<li class=\"text-sm text-slate-500\">Ninguém na fila.</li>";
+  renderAuditorRanking();
+}
+
+function renderAuditorRanking() {
+  const list = document.getElementById("auditor-ranking");
+  const toggle = document.getElementById("toggle-auditor-ranking");
+  if (!list || !toggle) return;
+
+  const visibleRanking = auditorRankingExpanded ? state.auditRanking : state.auditRanking.slice(0, 5);
+  list.innerHTML = visibleRanking.length ? visibleRanking.map((item, index) => {
+    const position = index + 1;
+    const isCurrentUser = item.usuario_id === session?.id;
+    const total = Number(item.total) || 0;
+    const label = total === 1 ? "auditoria" : "auditorias";
+    return `<li class="flex items-center justify-between gap-3 rounded-xl bg-slate-50 px-3 py-2.5 dark:bg-slate-800/70"><div class="flex min-w-0 items-center gap-3"><span class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${position <= 3 ? "bg-brand-500 text-white" : "bg-white text-slate-600 dark:bg-slate-900 dark:text-slate-300"} text-xs font-extrabold">${ordinal(position)}</span><p class="truncate text-sm font-semibold">${escapeHtml(item.nome)}${isCurrentUser ? " <span class=\"font-normal text-slate-500\">(você)</span>" : ""}</p></div><span class="shrink-0 text-xs font-semibold text-slate-500 dark:text-slate-400">${total} ${label}</span></li>`;
+  }).join("") : "<li class=\"rounded-xl bg-slate-50 px-3 py-4 text-sm text-slate-500 dark:bg-slate-800/70\">Nenhuma auditoria concluída ainda.</li>";
+
+  toggle.hidden = state.auditRanking.length <= 5;
+  toggle.textContent = auditorRankingExpanded ? "Ver menos" : "Ver mais";
 }
 
 function renderUserSelect() {
@@ -276,6 +313,7 @@ async function logout() {
     notifyError(error);
   } finally {
     session = null;
+    auditorRankingExpanded = false;
     saveSession(null);
     showView("login");
   }
@@ -301,6 +339,7 @@ document.getElementById("login-form").addEventListener("submit", async (event) =
   try {
     const result = await api("/api/login", { method: "POST", body: JSON.stringify({ nome: document.getElementById("login-user").value.trim(), senha: document.getElementById("login-pass").value }) });
     session = { ...result.usuario, token: result.token };
+    auditorRankingExpanded = false;
     saveSession(session);
     error.classList.add("hidden");
     await refreshState();
@@ -370,6 +409,10 @@ document.addEventListener("click", async (event) => {
     return refreshState().catch(notifyError);
   }
   if (action === "export-excel") return downloadExcelReport().catch(notifyError);
+  if (action === "toggle-auditor-ranking") {
+    auditorRankingExpanded = !auditorRankingExpanded;
+    return renderAuditorRanking();
+  }
   if (action === "edit-user") return startUserEdit(Number(button.dataset.userId));
   if (action === "toggle-inactive-users") {
     showInactiveProfiles = !showInactiveProfiles;
