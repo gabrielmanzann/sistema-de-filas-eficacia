@@ -32,6 +32,11 @@ body {
   animation: fade-up 0.28s ease;
 }
 
+button:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
+
 @keyframes fade-up {
   from {
     opacity: 0;
