@@ -409,6 +409,21 @@ document.addEventListener("click", async (event) => {
     return refreshState().catch(notifyError);
   }
   if (action === "export-excel") return downloadExcelReport().catch(notifyError);
+  if (action === "reset-audit-metrics") {
+    const confirmed = confirm("Zerar todas as auditorias concluídas? Esta ação é irreversível e afeta os rankings, a semana e o mês.");
+    if (!confirmed) return;
+    try {
+      const result = await api("/api/gestor/metricas/resetar", {
+        method: "POST",
+        body: JSON.stringify({ confirmar: true }),
+      });
+      await refreshState();
+      alert(`${result.auditorias_removidas} auditoria(s) removida(s). Métricas zeradas.`);
+    } catch (error) {
+      notifyError(error);
+    }
+    return;
+  }
   if (action === "toggle-auditor-ranking") {
     auditorRankingExpanded = !auditorRankingExpanded;
     return renderAuditorRanking();

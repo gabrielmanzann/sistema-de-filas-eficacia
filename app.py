@@ -962,6 +962,32 @@ def export_excel():
     )
 
 
+@app.post("/api/gestor/metricas/resetar")
+@manager_required
+def reset_audit_metrics():
+    """Apaga o histórico de auditorias e reinicia o AUTO_INCREMENT no MySQL."""
+    data = request_data()
+    if data.get("confirmar") is not True:
+        raise ApiError("Confirme a limpeza das métricas para continuar.", 400)
+
+    with connection() as conn:
+        cursor = conn.cursor()
+        # A mesma trava usada na conclusão evita que uma auditoria seja gravada
+        # entre a contagem e o reset do histórico.
+        with queue_mutation_lock(conn):
+            cursor.execute("SELECT COUNT(*) FROM auditorias_concluidas")
+            deleted_count = cursor.fetchone()[0]
+            # TRUNCATE é o comando MySQL que também reinicia o AUTO_INCREMENT.
+            cursor.execute("TRUNCATE TABLE auditorias_concluidas")
+
+    return jsonify(
+        {
+            "mensagem": "Métricas e ranking foram zerados com sucesso.",
+            "auditorias_removidas": deleted_count,
+        }
+    )
+
+
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     app.run(
