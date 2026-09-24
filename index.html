@@ -105,6 +105,14 @@
             <div class="mt-5 overflow-x-auto"><table class="min-w-full text-left text-sm"><thead class="border-b border-slate-200 text-xs uppercase text-slate-500 dark:border-slate-700"><tr><th class="px-3 py-3">Nome</th><th class="px-3 py-3">Perfil</th><th class="px-3 py-3">Status</th><th class="px-3 py-3 text-right">Ações</th></tr></thead><tbody id="user-list"></tbody></table></div>
           </article>
 
+          <article class="mb-5 rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+            <div class="flex flex-wrap items-center justify-between gap-3">
+              <div><p class="text-xs font-semibold uppercase tracking-[0.18em] text-brand-600 dark:text-brand-400">Perfis desativados</p><h3 class="text-lg font-bold">Reativar acessos</h3><p class="mt-1 text-sm text-slate-500"><span id="inactive-users-count">0</span> perfil(is) desativado(s).</p></div>
+              <button id="toggle-inactive-users" type="button" data-action="toggle-inactive-users" class="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold dark:border-slate-700 dark:bg-slate-800">Ver perfis desativados</button>
+            </div>
+            <div id="inactive-users-panel" class="mt-5 hidden overflow-x-auto"><table class="min-w-full text-left text-sm"><thead class="border-b border-slate-200 text-xs uppercase text-slate-500 dark:border-slate-700"><tr><th class="px-3 py-3">Nome</th><th class="px-3 py-3">Perfil</th><th class="px-3 py-3">Status</th><th class="px-3 py-3 text-right">Ações</th></tr></thead><tbody id="inactive-user-list"></tbody></table></div>
+          </article>
+
           <article class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
             <div class="mb-4 flex flex-wrap items-center justify-between gap-3">
               <div><p class="text-xs font-semibold uppercase tracking-[0.18em] text-brand-600 dark:text-brand-400">Relatórios</p><h3 class="text-lg font-bold">Métricas e ranking</h3></div>

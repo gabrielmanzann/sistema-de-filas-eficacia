@@ -7,9 +7,10 @@ Sistema web full-stack desenvolvido para otimizar o fluxo de atendimento da equi
 ## 🚀 Funcionalidades Principais
 
 - **Fila Circular Inteligente:** Ao concluir uma auditoria, o colaborador é enviado automaticamente para o final da fila, mantendo o fluxo contínuo e equilibrado.
+- **Entrada e saída automáticas:** Funcionários entram na fila no login e são removidos no logout ou ao encerrar a aba. A inclusão é idempotente, portanto não cria duplicatas.
 - **Controle de Acessos (RBAC):**
   - **Auditor:** Visualização da fila, status da sua vez e ação de conclusão.
-  - **Gestor:** Painel com indicadores, gerenciamento de equipe (cadastro/edição/alteração de senha) e métricas.
+  - **Gestor:** Painel com indicadores, gerenciamento de equipe (cadastro/edição/alteração de senha), perfis desativados reativáveis e métricas.
 - **Métricas em Tempo Real:** Alternância rápida de desempenho por períodos (**Hoje**, **Esta Semana**, **Este Mês**).
 - **Exportação de Relatórios em Excel:**
   - Planilha estilizada no padrão corporativo (TIM / Unicom Group).

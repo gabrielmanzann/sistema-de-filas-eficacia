@@ -9,11 +9,13 @@ let state = {
   ranking: [],
   metrics: { periodo: "dia", titulo: "Hoje", total_auditorias: 0, ranking: [] },
   users: [],
+  inactiveUsers: [],
 };
 let session = loadSession();
 let currentView = "login";
 let editingUserId = null;
 let selectedMetricPeriod = "dia";
+let showInactiveProfiles = false;
 
 const views = {
   login: document.getElementById("view-login"),
@@ -23,13 +25,13 @@ const views = {
 };
 
 function loadSession() {
-  try { return JSON.parse(localStorage.getItem(SESSION_KEY) || "null"); }
+  try { return JSON.parse(sessionStorage.getItem(SESSION_KEY) || "null"); }
   catch { return null; }
 }
 
 function saveSession(value) {
-  if (value) localStorage.setItem(SESSION_KEY, JSON.stringify(value));
-  else localStorage.removeItem(SESSION_KEY);
+  if (value) sessionStorage.setItem(SESSION_KEY, JSON.stringify(value));
+  else sessionStorage.removeItem(SESSION_KEY);
 }
 
 function escapeHtml(value) {
@@ -88,12 +90,15 @@ function isManager() { return session?.tipo_usuario === "GESTOR"; }
 async function refreshState() {
   const period = isManager() ? selectedMetricPeriod : "dia";
   const requests = [api("/api/fila"), api(`/api/gestor/metrics?periodo=${period}`)];
-  if (isManager()) requests.push(api("/api/usuarios"));
-  const [queueResult, metricsResult, usersResult] = await Promise.all(requests);
+  if (isManager()) {
+    requests.push(api("/api/usuarios"), api("/api/usuarios/desativados"));
+  }
+  const [queueResult, metricsResult, usersResult, inactiveUsersResult] = await Promise.all(requests);
   state.queue = queueResult.fila;
   state.metrics = metricsResult;
   state.ranking = metricsResult.ranking;
   state.users = usersResult?.usuarios || [];
+  state.inactiveUsers = inactiveUsersResult?.usuarios || [];
   render();
 }
 
@@ -174,6 +179,21 @@ function renderUsers() {
   renderUserSelect();
 }
 
+function renderInactiveUsers() {
+  const panel = document.getElementById("inactive-users-panel");
+  const toggle = document.getElementById("toggle-inactive-users");
+  const count = document.getElementById("inactive-users-count");
+  const list = document.getElementById("inactive-user-list");
+  if (!panel || !toggle || !count || !list) return;
+
+  count.textContent = String(state.inactiveUsers.length);
+  panel.classList.toggle("hidden", !showInactiveProfiles);
+  toggle.textContent = showInactiveProfiles ? "Ocultar perfis" : "Ver perfis desativados";
+  list.innerHTML = state.inactiveUsers.length ? state.inactiveUsers.map((user) => (
+    `<tr class="border-b border-slate-100 dark:border-slate-800"><td class="px-3 py-3 font-medium">${escapeHtml(user.nome)}</td><td class="px-3 py-3">${user.tipo_usuario === "GESTOR" ? "Gestor" : "Funcionário"}</td><td class="px-3 py-3"><span class="rounded-full bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-600 dark:bg-slate-800 dark:text-slate-300">Desativado</span></td><td class="px-3 py-3 text-right"><button type="button" data-action="reactivate-user" data-user-id="${user.id}" class="rounded-lg bg-emerald-600 px-2 py-1 text-xs font-semibold text-white hover:bg-emerald-700">Reativar</button></td></tr>`
+  )).join("") : "<tr><td colspan=\"4\" class=\"px-3 py-5 text-slate-500\">Nenhum perfil desativado.</td></tr>";
+}
+
 function renderGestor() {
   const current = state.queue[0];
   document.getElementById("gestor-current").innerHTML = current ? `<div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between"><div><p class="text-sm font-semibold uppercase tracking-widest text-indigo-100">Vez atual</p><p class="mt-1 text-3xl font-extrabold">${escapeHtml(current.nome)}</p><p class="mt-1 text-sm text-indigo-100">está realizando a auditoria agora.</p></div><button type="button" data-action="complete-turn" class="rounded-xl bg-white px-4 py-3 text-sm font-semibold text-brand-700 hover:bg-indigo-50">Concluir e passar a vez</button></div>` : "<p class=\"text-2xl font-extrabold\">Ninguém na vez</p><p class=\"mt-1 text-sm text-indigo-100\">Adicione funcionários à fila para iniciar.</p>";
@@ -192,6 +212,7 @@ function renderGestor() {
     button.classList.toggle("dark:bg-slate-800", !isSelected);
   });
   renderUsers();
+  renderInactiveUsers();
 }
 
 function renderDisplay() {
@@ -246,6 +267,32 @@ function openPasswordDialog() {
 function closePasswordDialog() {
   document.getElementById("password-dialog").classList.add("hidden");
   document.getElementById("password-dialog").classList.remove("flex");
+}
+
+async function logout() {
+  try {
+    if (session?.token) await api("/api/logout", { method: "POST", body: JSON.stringify({}) });
+  } catch (error) {
+    notifyError(error);
+  } finally {
+    session = null;
+    saveSession(null);
+    showView("login");
+  }
+}
+
+function notifyQueueExitOnPageHide(event) {
+  if (event.persisted || !session?.token || isManager()) return;
+  const payload = JSON.stringify({ token: session.token });
+  const endpoint = `${API_ORIGIN}/api/logout`;
+  const beaconBody = new Blob([payload], { type: "application/json" });
+  if (navigator.sendBeacon?.(endpoint, beaconBody)) return;
+  fetch(endpoint, {
+    method: "POST",
+    body: payload,
+    headers: { "Content-Type": "application/json" },
+    keepalive: true,
+  }).catch(() => {});
 }
 
 document.getElementById("login-form").addEventListener("submit", async (event) => {
@@ -310,7 +357,7 @@ document.addEventListener("click", async (event) => {
   if (!button) return;
   const action = button.dataset.action;
   if (action === "toggle-theme") return toggleTheme();
-  if (action === "logout") { session = null; saveSession(null); return showView("login"); }
+  if (action === "logout") return logout();
   if (action === "open-password") return openPasswordDialog();
   if (action === "close-password") return closePasswordDialog();
   if (action === "open-display") return showView("display");
@@ -324,6 +371,17 @@ document.addEventListener("click", async (event) => {
   }
   if (action === "export-excel") return downloadExcelReport().catch(notifyError);
   if (action === "edit-user") return startUserEdit(Number(button.dataset.userId));
+  if (action === "toggle-inactive-users") {
+    showInactiveProfiles = !showInactiveProfiles;
+    return renderInactiveUsers();
+  }
+  if (action === "reactivate-user") {
+    const target = state.inactiveUsers.find((user) => user.id === Number(button.dataset.userId));
+    if (target && confirm(`Reativar o perfil de ${target.nome}?`)) {
+      return refreshAfter(() => api(`/api/usuarios/${target.id}/reativar`, { method: "POST", body: JSON.stringify({}) }));
+    }
+    return;
+  }
   if (action === "deactivate-user") {
     const target = state.users.find((user) => user.id === Number(button.dataset.userId));
     if (target && confirm(`Inativar ${target.nome}? O acesso e a participação na fila serão removidos.`)) {
@@ -340,9 +398,22 @@ document.addEventListener("click", async (event) => {
 applyTheme();
 if (session?.token) {
   showView(isManager() ? "gestor" : "auditor");
-  refreshState().catch(() => { session = null; saveSession(null); showView("login"); });
+  (async () => {
+    try {
+      // Um reload dispara pagehide. A entrada idempotente mantém a mesma
+      // sessão na fila sem criar uma duplicata.
+      if (!isManager()) await api("/api/fila/entrar", { method: "POST", body: JSON.stringify({}) });
+      await refreshState();
+    } catch {
+      session = null;
+      saveSession(null);
+      showView("login");
+    }
+  })();
 } else {
   session = null;
   saveSession(null);
   showView("login");
 }
+
+window.addEventListener("pagehide", notifyQueueExitOnPageHide);

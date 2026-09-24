@@ -3,6 +3,7 @@ import hmac
 import logging
 import os
 import secrets
+from contextlib import contextmanager, nullcontext
 from datetime import datetime
 from functools import wraps
 from io import BytesIO
@@ -79,6 +80,8 @@ def frontend_assets(filename):
 
 token_serializer = URLSafeTimedSerializer(app.config["SECRET_KEY"], salt="fila-auditoria-auth")
 TOKEN_MAX_AGE_SECONDS = int(os.getenv("TOKEN_MAX_AGE_SECONDS", "28800"))
+QUEUE_LOCK_NAME = "fila_auditoria_mutation"
+QUEUE_LOCK_TIMEOUT_SECONDS = 5
 LOGO_PATH = Path(app.root_path) / "assets" / "logo-unicomgroup.png"
 
 TIM_BLUE = "001A9C"
@@ -198,30 +201,52 @@ def auth_token(user):
     return token_serializer.dumps({"usuario_id": user["id"]})
 
 
+def token_from_authorization():
+    authorization = request.headers.get("Authorization", "")
+    if not authorization.startswith("Bearer "):
+        raise ApiError("Autenticação obrigatória.", 401)
+    return authorization.removeprefix("Bearer ").strip()
+
+
+def current_user_from_token(token):
+    """Valida o token e devolve somente um usuário atualmente ativo."""
+    if not isinstance(token, str) or not token:
+        raise ApiError("Sessão inválida ou expirada. Entre novamente.", 401)
+    try:
+        payload = token_serializer.loads(token, max_age=TOKEN_MAX_AGE_SECONDS)
+        user_id = int(payload["usuario_id"])
+    except (BadSignature, SignatureExpired, KeyError, TypeError, ValueError):
+        raise ApiError("Sessão inválida ou expirada. Entre novamente.", 401) from None
+
+    with connection() as conn:
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute(
+            "SELECT id, nome, tipo_usuario, ativo FROM usuarios WHERE id = %s AND ativo = TRUE",
+            (user_id,),
+        )
+        user = cursor.fetchone()
+    if not user:
+        raise ApiError("Usuário inativo ou não encontrado.", 401)
+    return user
+
+
+def logout_token_from_request():
+    """Aceita Bearer normal ou o token enviado pelo navigator.sendBeacon."""
+    authorization = request.headers.get("Authorization", "")
+    if authorization.startswith("Bearer "):
+        return authorization.removeprefix("Bearer ").strip()
+
+    data = request.get_json(silent=True)
+    token = data.get("token") if isinstance(data, dict) else None
+    if not isinstance(token, str) or not token:
+        raise ApiError("Autenticação obrigatória.", 401)
+    return token
+
+
 def authenticated(view):
     @wraps(view)
     def wrapper(*args, **kwargs):
-        authorization = request.headers.get("Authorization", "")
-        if not authorization.startswith("Bearer "):
-            raise ApiError("Autenticação obrigatória.", 401)
-        try:
-            payload = token_serializer.loads(
-                authorization.removeprefix("Bearer "), max_age=TOKEN_MAX_AGE_SECONDS
-            )
-            user_id = int(payload["usuario_id"])
-        except (BadSignature, SignatureExpired, KeyError, TypeError, ValueError):
-            raise ApiError("Sessão inválida ou expirada. Entre novamente.", 401) from None
-
-        with connection() as conn:
-            cursor = conn.cursor(dictionary=True)
-            cursor.execute(
-                "SELECT id, nome, tipo_usuario, ativo FROM usuarios WHERE id = %s AND ativo = TRUE",
-                (user_id,),
-            )
-            user = cursor.fetchone()
-        if not user:
-            raise ApiError("Usuário inativo ou não encontrado.", 401)
-        g.current_user = user
+        g.current_user = current_user_from_token(token_from_authorization())
         return view(*args, **kwargs)
 
     return wrapper
@@ -236,6 +261,24 @@ def manager_required(view):
         return view(*args, **kwargs)
 
     return wrapper
+
+
+@contextmanager
+def queue_mutation_lock(conn):
+    """Serializa mudanças na fila para manter posições únicas sob concorrência."""
+    lock_cursor = conn.cursor()
+    acquired = False
+    try:
+        lock_cursor.execute("SELECT GET_LOCK(%s, %s)", (QUEUE_LOCK_NAME, QUEUE_LOCK_TIMEOUT_SECONDS))
+        acquired = lock_cursor.fetchone()[0] == 1
+        if not acquired:
+            raise ApiError("A fila está sendo atualizada. Tente novamente em instantes.", 409)
+        yield
+    finally:
+        if acquired:
+            lock_cursor.execute("SELECT RELEASE_LOCK(%s)", (QUEUE_LOCK_NAME,))
+            lock_cursor.fetchone()
+        lock_cursor.close()
 
 
 def queue_rows(cursor):
@@ -289,6 +332,43 @@ def normalize_queue(cursor):
     cursor.execute("SELECT id FROM fila_auditoria ORDER BY posicao, id")
     item_ids = [row[0] for row in cursor.fetchall()]
     set_queue_order(cursor, item_ids)
+
+
+def enqueue_employee(cursor, user_id):
+    """Inclui o funcionário ativo no fim da fila; a operação é idempotente."""
+    cursor.execute(
+        "SELECT tipo_usuario, ativo FROM usuarios WHERE id = %s FOR UPDATE", (user_id,)
+    )
+    user = cursor.fetchone()
+    if not user:
+        return False
+    user_type = user["tipo_usuario"] if isinstance(user, dict) else user[0]
+    active = user["ativo"] if isinstance(user, dict) else user[1]
+    if user_type != "FUNCIONARIO" or not active:
+        return False
+
+    cursor.execute("SELECT id FROM fila_auditoria WHERE usuario_id = %s FOR UPDATE", (user_id,))
+    if cursor.fetchone():
+        return False
+
+    cursor.execute("SELECT posicao FROM fila_auditoria ORDER BY posicao DESC LIMIT 1 FOR UPDATE")
+    last_item = cursor.fetchone()
+    last_position = (last_item["posicao"] if isinstance(last_item, dict) else last_item[0]) if last_item else 0
+    position = last_position + 1
+    cursor.execute(
+        "INSERT INTO fila_auditoria (usuario_id, posicao, status) VALUES (%s, %s, %s)",
+        (user_id, position, "EM_ANDAMENTO" if position == 1 else "AGUARDANDO"),
+    )
+    return True
+
+
+def remove_employee_from_queue(cursor, user_id):
+    """Remove um funcionário da fila e recalcula a vez atual, se necessário."""
+    cursor.execute("DELETE FROM fila_auditoria WHERE usuario_id = %s", (user_id,))
+    removed = cursor.rowcount > 0
+    if removed:
+        normalize_queue(cursor)
+    return removed
 
 
 def metric_period(value):
@@ -477,9 +557,54 @@ def login():
                 "UPDATE usuarios SET senha = %s WHERE id = %s",
                 (generate_password_hash(password), user["id"]),
             )
-            conn.commit()
+        joined_queue = False
+        if user["tipo_usuario"] == "FUNCIONARIO":
+            # A chave única por usuário e a trava da fila tornam o login
+            # idempotente, inclusive quando há duas tentativas simultâneas.
+            with queue_mutation_lock(conn):
+                joined_queue = enqueue_employee(cursor, user["id"])
+        conn.commit()
 
-    return jsonify({"usuario": public_user(user), "token": auth_token(user)})
+    return jsonify(
+        {
+            "usuario": public_user(user),
+            "token": auth_token(user),
+            "entrou_na_fila": joined_queue,
+        }
+    )
+
+
+@app.post("/api/logout")
+def logout():
+    """Encerra a participação do funcionário inclusive em chamadas sendBeacon."""
+    user = current_user_from_token(logout_token_from_request())
+    removed_from_queue = False
+    if user["tipo_usuario"] == "FUNCIONARIO":
+        with connection() as conn:
+            cursor = conn.cursor()
+            with queue_mutation_lock(conn):
+                removed_from_queue = remove_employee_from_queue(cursor, user["id"])
+            conn.commit()
+    return jsonify(
+        {
+            "mensagem": "Sessão encerrada com sucesso.",
+            "removido_da_fila": removed_from_queue,
+        }
+    )
+
+
+@app.post("/api/fila/entrar")
+@authenticated
+def join_own_queue():
+    """Reinsere apenas o próprio funcionário ao restaurar uma aba recarregada."""
+    if g.current_user["tipo_usuario"] != "FUNCIONARIO":
+        raise ApiError("Apenas funcionários participam da fila.", 409)
+    with connection() as conn:
+        cursor = conn.cursor()
+        with queue_mutation_lock(conn):
+            joined_queue = enqueue_employee(cursor, g.current_user["id"])
+        conn.commit()
+        return jsonify({"entrou_na_fila": joined_queue, "fila": queue_rows(cursor)})
 
 
 @app.patch("/api/minha-senha")
@@ -517,6 +642,18 @@ def list_users():
     with connection() as conn:
         cursor = conn.cursor(dictionary=True)
         cursor.execute(query)
+        users = [public_user(user) for user in cursor.fetchall()]
+    return jsonify({"usuarios": users})
+
+
+@app.get("/api/usuarios/desativados")
+@manager_required
+def list_inactive_users():
+    with connection() as conn:
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute(
+            "SELECT id, nome, tipo_usuario, ativo FROM usuarios WHERE ativo = FALSE ORDER BY nome"
+        )
         users = [public_user(user) for user in cursor.fetchall()]
     return jsonify({"usuarios": users})
 
@@ -560,6 +697,7 @@ def update_user(user_id):
         raise ApiError("Informe ao menos um campo para atualização.")
     if user_id == g.current_user["id"] and (user_type == "FUNCIONARIO" or active is False):
         raise ApiError("Não é permitido remover seu próprio acesso de gestor.", 409)
+    should_remove_from_queue = active is False or user_type == "GESTOR"
 
     assignments, values = [], []
     if name is not None:
@@ -579,23 +717,44 @@ def update_user(user_id):
     try:
         with connection() as conn:
             cursor = conn.cursor()
-            cursor.execute(f"UPDATE usuarios SET {', '.join(assignments)} WHERE id = %s", values)
-            if cursor.rowcount == 0:
-                cursor.execute("SELECT 1 FROM usuarios WHERE id = %s", (user_id,))
-                if not cursor.fetchone():
-                    raise ApiError("Usuário não encontrado.", 404)
-            if active is False:
-                cursor.execute("DELETE FROM fila_auditoria WHERE usuario_id = %s", (user_id,))
-                normalize_queue(cursor)
-            conn.commit()
-            read_cursor = conn.cursor(dictionary=True)
-            read_cursor.execute(
-                "SELECT id, nome, tipo_usuario, ativo FROM usuarios WHERE id = %s", (user_id,)
-            )
-            user = read_cursor.fetchone()
+            lock = queue_mutation_lock(conn) if should_remove_from_queue else nullcontext()
+            with lock:
+                cursor.execute(f"UPDATE usuarios SET {', '.join(assignments)} WHERE id = %s", values)
+                if cursor.rowcount == 0:
+                    cursor.execute("SELECT 1 FROM usuarios WHERE id = %s", (user_id,))
+                    if not cursor.fetchone():
+                        raise ApiError("Usuário não encontrado.", 404)
+                if should_remove_from_queue:
+                    remove_employee_from_queue(cursor, user_id)
+                conn.commit()
+                read_cursor = conn.cursor(dictionary=True)
+                read_cursor.execute(
+                    "SELECT id, nome, tipo_usuario, ativo FROM usuarios WHERE id = %s", (user_id,)
+                )
+                user = read_cursor.fetchone()
     except mysql.connector.IntegrityError:
         raise ApiError("Já existe um usuário com este nome.", 409) from None
     return jsonify({"mensagem": "Usuário atualizado com sucesso.", "usuario": public_user(user)})
+
+
+@app.post("/api/usuarios/<int:user_id>/reativar")
+@manager_required
+def reactivate_user(user_id):
+    with connection() as conn:
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute("UPDATE usuarios SET ativo = TRUE WHERE id = %s AND ativo = FALSE", (user_id,))
+        if cursor.rowcount == 0:
+            cursor.execute("SELECT ativo FROM usuarios WHERE id = %s", (user_id,))
+            existing_user = cursor.fetchone()
+            if not existing_user:
+                raise ApiError("Usuário não encontrado.", 404)
+            raise ApiError("Este usuário já está ativo.", 409)
+        conn.commit()
+        cursor.execute(
+            "SELECT id, nome, tipo_usuario, ativo FROM usuarios WHERE id = %s", (user_id,)
+        )
+        user = cursor.fetchone()
+    return jsonify({"mensagem": "Usuário reativado com sucesso.", "usuario": public_user(user)})
 
 
 @app.delete("/api/usuarios/<int:user_id>")
@@ -605,12 +764,12 @@ def deactivate_user(user_id):
         raise ApiError("Não é permitido inativar o próprio usuário.", 409)
     with connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("UPDATE usuarios SET ativo = FALSE WHERE id = %s AND ativo = TRUE", (user_id,))
-        if cursor.rowcount == 0:
-            raise ApiError("Usuário não encontrado ou já inativo.", 404)
-        cursor.execute("DELETE FROM fila_auditoria WHERE usuario_id = %s", (user_id,))
-        normalize_queue(cursor)
-        conn.commit()
+        with queue_mutation_lock(conn):
+            cursor.execute("UPDATE usuarios SET ativo = FALSE WHERE id = %s AND ativo = TRUE", (user_id,))
+            if cursor.rowcount == 0:
+                raise ApiError("Usuário não encontrado ou já inativo.", 404)
+            remove_employee_from_queue(cursor, user_id)
+            conn.commit()
     return jsonify({"mensagem": "Usuário inativado com sucesso."})
 
 
@@ -644,28 +803,29 @@ def complete_queue():
     with connection() as conn:
         cursor = conn.cursor()
         conn.start_transaction()
-        cursor.execute(
-            "SELECT id, usuario_id FROM fila_auditoria WHERE status = 'EM_ANDAMENTO' "
-            "ORDER BY posicao LIMIT 1 FOR UPDATE"
-        )
-        current = cursor.fetchone()
-        if not current:
-            conn.rollback()
-            raise ApiError("Não há auditoria em andamento.", 409)
-        current_item_id, current_user_id = current
-        if g.current_user["tipo_usuario"] != "GESTOR" and current_user_id != g.current_user["id"]:
-            conn.rollback()
-            raise ApiError("Apenas o funcionário da vez pode concluir a auditoria.", 403)
-        cursor.execute("INSERT INTO auditorias_concluidas (usuario_id) VALUES (%s)", (current_user_id,))
-        cursor.execute(
-            "SELECT id FROM fila_auditoria WHERE id <> %s ORDER BY posicao, id FOR UPDATE",
-            (current_item_id,),
-        )
-        next_item_ids = [row[0] for row in cursor.fetchall()]
-        # O item concluído é anexado ao fim; o primeiro da lista passa a ser a vez atual.
-        set_queue_order(cursor, [*next_item_ids, current_item_id])
-        conn.commit()
-        return jsonify({"mensagem": "Auditoria concluída e funcionário reenfileirado.", "fila": queue_rows(cursor)})
+        with queue_mutation_lock(conn):
+            cursor.execute(
+                "SELECT id, usuario_id FROM fila_auditoria WHERE status = 'EM_ANDAMENTO' "
+                "ORDER BY posicao LIMIT 1 FOR UPDATE"
+            )
+            current = cursor.fetchone()
+            if not current:
+                conn.rollback()
+                raise ApiError("Não há auditoria em andamento.", 409)
+            current_item_id, current_user_id = current
+            if g.current_user["tipo_usuario"] != "GESTOR" and current_user_id != g.current_user["id"]:
+                conn.rollback()
+                raise ApiError("Apenas o funcionário da vez pode concluir a auditoria.", 403)
+            cursor.execute("INSERT INTO auditorias_concluidas (usuario_id) VALUES (%s)", (current_user_id,))
+            cursor.execute(
+                "SELECT id FROM fila_auditoria WHERE id <> %s ORDER BY posicao, id FOR UPDATE",
+                (current_item_id,),
+            )
+            next_item_ids = [row[0] for row in cursor.fetchall()]
+            # O item concluído é anexado ao fim; o primeiro da lista passa a ser a vez atual.
+            set_queue_order(cursor, [*next_item_ids, current_item_id])
+            conn.commit()
+            return jsonify({"mensagem": "Auditoria concluída e funcionário reenfileirado.", "fila": queue_rows(cursor)})
 
 
 @app.post("/api/fila/adicionar")
@@ -674,22 +834,23 @@ def add_to_queue():
     data = request_data()
     with connection() as conn:
         cursor = conn.cursor()
-        user = find_user_for_queue(cursor, data)
-        if not user:
-            raise ApiError("Funcionário não encontrado.", 404)
-        if user[2] != "FUNCIONARIO":
-            raise ApiError("Apenas funcionários podem ser adicionados à fila.", 409)
-        cursor.execute("SELECT 1 FROM fila_auditoria WHERE usuario_id = %s", (user[0],))
-        if cursor.fetchone():
-            raise ApiError("Este funcionário já está na fila.", 409)
-        cursor.execute("SELECT COALESCE(MAX(posicao), 0) + 1 FROM fila_auditoria")
-        position = cursor.fetchone()[0]
-        cursor.execute(
-            "INSERT INTO fila_auditoria (usuario_id, posicao, status) VALUES (%s, %s, %s)",
-            (user[0], position, "EM_ANDAMENTO" if position == 1 else "AGUARDANDO"),
-        )
-        conn.commit()
-        return jsonify({"fila": queue_rows(cursor)}), 201
+        with queue_mutation_lock(conn):
+            user = find_user_for_queue(cursor, data)
+            if not user:
+                raise ApiError("Funcionário não encontrado.", 404)
+            if user[2] != "FUNCIONARIO":
+                raise ApiError("Apenas funcionários podem ser adicionados à fila.", 409)
+            cursor.execute("SELECT 1 FROM fila_auditoria WHERE usuario_id = %s", (user[0],))
+            if cursor.fetchone():
+                raise ApiError("Este funcionário já está na fila.", 409)
+            cursor.execute("SELECT COALESCE(MAX(posicao), 0) + 1 FROM fila_auditoria")
+            position = cursor.fetchone()[0]
+            cursor.execute(
+                "INSERT INTO fila_auditoria (usuario_id, posicao, status) VALUES (%s, %s, %s)",
+                (user[0], position, "EM_ANDAMENTO" if position == 1 else "AGUARDANDO"),
+            )
+            conn.commit()
+            return jsonify({"fila": queue_rows(cursor)}), 201
 
 
 @app.post("/api/fila/reordenar")
@@ -701,23 +862,24 @@ def reorder_queue():
         raise ApiError("Informe id numérico e a ação SUBIR ou DESCER.")
     with connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT posicao FROM fila_auditoria WHERE id = %s", (item_id,))
-        item = cursor.fetchone()
-        if not item:
-            raise ApiError("Item da fila não encontrado.", 404)
-        target = item[0] - 1 if action == "SUBIR" else item[0] + 1
-        cursor.execute("SELECT id FROM fila_auditoria WHERE posicao = %s", (target,))
-        neighbor = cursor.fetchone()
-        if neighbor:
-            cursor.execute(
-                "UPDATE fila_auditoria SET posicao = -posicao WHERE id IN (%s, %s)",
-                (item_id, neighbor[0]),
-            )
-            cursor.execute("UPDATE fila_auditoria SET posicao = %s WHERE id = %s", (target, item_id))
-            cursor.execute("UPDATE fila_auditoria SET posicao = %s WHERE id = %s", (item[0], neighbor[0]))
-            normalize_queue(cursor)
-            conn.commit()
-        return jsonify({"fila": queue_rows(cursor)})
+        with queue_mutation_lock(conn):
+            cursor.execute("SELECT posicao FROM fila_auditoria WHERE id = %s", (item_id,))
+            item = cursor.fetchone()
+            if not item:
+                raise ApiError("Item da fila não encontrado.", 404)
+            target = item[0] - 1 if action == "SUBIR" else item[0] + 1
+            cursor.execute("SELECT id FROM fila_auditoria WHERE posicao = %s", (target,))
+            neighbor = cursor.fetchone()
+            if neighbor:
+                cursor.execute(
+                    "UPDATE fila_auditoria SET posicao = -posicao WHERE id IN (%s, %s)",
+                    (item_id, neighbor[0]),
+                )
+                cursor.execute("UPDATE fila_auditoria SET posicao = %s WHERE id = %s", (target, item_id))
+                cursor.execute("UPDATE fila_auditoria SET posicao = %s WHERE id = %s", (item[0], neighbor[0]))
+                normalize_queue(cursor)
+                conn.commit()
+            return jsonify({"fila": queue_rows(cursor)})
 
 
 @app.post("/api/fila/remover")
@@ -728,12 +890,13 @@ def remove_from_queue():
         raise ApiError("id numérico é obrigatório.")
     with connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("DELETE FROM fila_auditoria WHERE id = %s", (item_id,))
-        if cursor.rowcount == 0:
-            raise ApiError("Item da fila não encontrado.", 404)
-        normalize_queue(cursor)
-        conn.commit()
-        return jsonify({"fila": queue_rows(cursor)})
+        with queue_mutation_lock(conn):
+            cursor.execute("DELETE FROM fila_auditoria WHERE id = %s", (item_id,))
+            if cursor.rowcount == 0:
+                raise ApiError("Item da fila não encontrado.", 404)
+            normalize_queue(cursor)
+            conn.commit()
+            return jsonify({"fila": queue_rows(cursor)})
 
 
 @app.post("/api/fila/limpar")
@@ -741,8 +904,9 @@ def remove_from_queue():
 def clear_queue():
     with connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("DELETE FROM fila_auditoria")
-        conn.commit()
+        with queue_mutation_lock(conn):
+            cursor.execute("DELETE FROM fila_auditoria")
+            conn.commit()
     return jsonify({"fila": []})
 
 
