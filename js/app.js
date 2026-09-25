@@ -3,6 +3,7 @@
 const API_ORIGIN = window.location.origin;
 const THEME_KEY = "fila-auditoria-theme";
 const SESSION_KEY = "fila-auditoria-session";
+const HIDDEN_METRIC_RANKING_NAMES = new Set(["ricardo", "emerson", "carla"]);
 
 let state = {
   queue: [],
@@ -444,10 +445,12 @@ function renderGestorOptimized() {
   setText("metric-waiting", Math.max(state.queue.length - 1, 0));
   setText("metric-total-completed", state.metrics.total_auditorias || 0);
   setText("metric-period-label", state.metrics.titulo || "Hoje");
-  const metricEntries = state.ranking.map((item, index) => ({
-    key: item.usuario_id,
-    html: `<li data-render-key="${item.usuario_id}" class="flex items-center justify-between rounded-xl bg-slate-50 px-4 py-3 dark:bg-slate-800/70"><span class="font-semibold">${ordinal(index + 1)} ${escapeHtml(item.nome)}</span><span class="text-sm text-slate-500">${item.total} auditorias</span></li>`,
-  }));
+  const metricEntries = state.ranking
+    .filter((item) => !HIDDEN_METRIC_RANKING_NAMES.has((item.nome || "").trim().toLocaleLowerCase("pt-BR")))
+    .map((item, index) => ({
+      key: item.usuario_id,
+      html: `<li data-render-key="${item.usuario_id}" class="flex items-center justify-between rounded-xl bg-slate-50 px-4 py-3 dark:bg-slate-800/70"><span class="font-semibold">${ordinal(index + 1)} ${escapeHtml(item.nome)}</span><span class="text-sm text-slate-500">${item.total} auditorias</span></li>`,
+    }));
   reconcileKeyedList("metrics-rank", metricEntries, "<li class=\"text-sm text-slate-500\">Nenhuma auditoria encontrada no per\u00edodo.</li>");
   document.querySelectorAll("[data-metric-period]").forEach((button) => {
     const isSelected = button.dataset.metricPeriod === selectedMetricPeriod;
