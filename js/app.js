@@ -430,7 +430,7 @@ function renderInactiveUsersOptimized() {
   setText("toggle-inactive-users", showInactiveProfiles ? "Ocultar perfis" : "Ver perfis desativados");
   const entries = state.inactiveUsers.map((user) => ({
     key: user.id,
-    html: `<tr data-render-key="${user.id}" class="border-b border-slate-100 dark:border-slate-800"><td class="px-3 py-3 font-medium">${escapeHtml(user.nome)}</td><td class="px-3 py-3">${user.tipo_usuario === "GESTOR" ? "Gestor" : "Funcion\u00e1rio"}</td><td class="px-3 py-3"><span class="rounded-full bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-600 dark:bg-slate-800 dark:text-slate-300">Desativado</span></td><td class="px-3 py-3 text-right"><button type="button" data-action="reactivate-user" data-user-id="${user.id}" class="rounded-lg bg-emerald-600 px-2 py-1 text-xs font-semibold text-white hover:bg-emerald-700">Reativar</button></td></tr>`,
+    html: `<tr data-render-key="${user.id}" class="border-b border-slate-100 dark:border-slate-800"><td class="px-3 py-3 font-medium">${escapeHtml(user.nome)}</td><td class="px-3 py-3">${user.tipo_usuario === "GESTOR" ? "Gestor" : "Funcion\u00e1rio"}</td><td class="px-3 py-3"><span class="rounded-full bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-600 dark:bg-slate-800 dark:text-slate-300">Desativado</span></td><td class="px-3 py-3 text-right"><div class="inline-flex flex-wrap justify-end gap-2"><button type="button" data-action="reactivate-user" data-user-id="${user.id}" class="rounded-lg bg-emerald-600 px-2 py-1 text-xs font-semibold text-white hover:bg-emerald-700">Reativar</button><button type="button" data-action="delete-user-permanently" data-user-id="${user.id}" class="rounded-lg border border-rose-200 px-2 py-1 text-xs font-semibold text-rose-600 hover:bg-rose-50 dark:border-rose-900 dark:text-rose-300 dark:hover:bg-rose-950/40">Excluir definitivamente</button></div></td></tr>`,
   }));
   reconcileKeyedList("inactive-user-list", entries, "<tr><td colspan=\"4\" class=\"px-3 py-5 text-slate-500\">Nenhum perfil desativado.</td></tr>");
 }
@@ -527,6 +527,14 @@ async function refreshAfter(action, { metrics = false, users = false } = {}) {
     notifyError(error);
     return null;
   }
+}
+
+async function permanentlyDeleteInactiveUser(userId) {
+  const result = await api(`/api/usuarios/${userId}/permanente`, { method: "DELETE" });
+  updateUsers(state.users, state.inactiveUsers.filter((user) => user.id !== userId));
+  refreshQueue().catch(notifyError);
+  refreshMetrics().catch(notifyError);
+  return result;
 }
 
 function resetUserForm() {
@@ -718,6 +726,13 @@ document.addEventListener("click", async (event) => {
     const target = state.inactiveUsers.find((user) => user.id === Number(button.dataset.userId));
     if (target && confirm(`Reativar o perfil de ${target.nome}?`)) {
       return withActionLock(button, "user-status", () => refreshAfter(() => api(`/api/usuarios/${target.id}/reativar`, { method: "POST", body: JSON.stringify({}) }), { users: true }), '[data-action="reactivate-user"], [data-action="deactivate-user"]');
+    }
+    return;
+  }
+  if (action === "delete-user-permanently") {
+    const target = state.inactiveUsers.find((user) => user.id === Number(button.dataset.userId));
+    if (target && confirm("Tem certeza que deseja excluir permanentemente este perfil? Esta ação não pode ser desfeita.")) {
+      return withActionLock(button, "permanent-user-deletion", () => permanentlyDeleteInactiveUser(target.id), '[data-action="reactivate-user"], [data-action="delete-user-permanently"]');
     }
     return;
   }

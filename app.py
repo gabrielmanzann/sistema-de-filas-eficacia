@@ -771,6 +771,28 @@ def reactivate_user(user_id):
     return jsonify({"mensagem": "Usuário reativado com sucesso.", "usuario": public_user(user)})
 
 
+@app.delete("/api/usuarios/<int:user_id>/permanente")
+@manager_required
+def permanently_delete_user(user_id):
+    """Exclui fisicamente apenas perfis que já estão desativados."""
+    with connection() as conn:
+        cursor = conn.cursor()
+        with queue_mutation_lock(conn):
+            cursor.execute("SELECT id, ativo FROM usuarios WHERE id = %s FOR UPDATE", (user_id,))
+            user = cursor.fetchone()
+            if not user:
+                raise ApiError("Usuário não encontrado.", 404)
+            if user[1]:
+                raise ApiError("Apenas usuários desativados podem ser excluídos definitivamente.", 409)
+
+            # Mantém a fila consistente mesmo para registros legados que possam
+            # ter permanecido nela após serem desativados.
+            remove_employee_from_queue(cursor, user_id)
+            cursor.execute("DELETE FROM usuarios WHERE id = %s", (user_id,))
+            conn.commit()
+    return jsonify({"mensagem": "Usuário excluído definitivamente com sucesso.", "usuario_id": user_id})
+
+
 @app.delete("/api/usuarios/<int:user_id>")
 @manager_required
 def deactivate_user(user_id):
